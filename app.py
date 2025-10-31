@@ -28,6 +28,7 @@ ROOMS = [
     {"id": "mr1", "name": "Meeting Room 1"},
     {"id": "mr2", "name": "Meeting Room 2"},
     {"id": "mr3", "name": "Meeting Room 3"},
+    {"id": "mr3", "name": "Meeting Room 4"},
     {"id": "br",  "name": "Board Room"},  # OTP required
 ]
 
@@ -634,3 +635,4 @@ with st.expander("📄 Download / Upload bookings CSV"):
 
 # Footer
 st.caption("Powered by Streamlit · CSV storage · IST timezone · Email OTP for Board Room (server-side, PIN-gated approval)")
+
