@@ -13,7 +13,8 @@ import os
 import re
 import json
 import hashlib
-from secrets import choice
+import secrets as py_secrets
+
 
 import smtplib, ssl
 from email.message import EmailMessage
@@ -28,7 +29,6 @@ ROOMS = [
     {"id": "mr1", "name": "Meeting Room 1"},
     {"id": "mr2", "name": "Meeting Room 2"},
     {"id": "mr3", "name": "Meeting Room 3"},
-    {"id": "mr3", "name": "Meeting Room 4"},
     {"id": "br",  "name": "Board Room"},  # OTP required
 ]
 
@@ -202,7 +202,8 @@ def otp_now_utc_ts() -> float:
     return datetime.utcnow().timestamp()
 
 def otp_random() -> str:
-    return "".join(choice("0123456789") for _ in range(OTP_LENGTH))
+    # generate a numeric OTP using Python's secrets module
+    return "".join(py_secrets.choice("0123456789") for _ in range(OTP_LENGTH))
 
 def otp_salt() -> str:
     return hashlib.sha1(os.urandom(16)).hexdigest()
@@ -301,6 +302,13 @@ def send_otp_email_to_approver(to_email: str, otp_plain: str, brand="Omega Finan
     Server-side email via SMTP (Gmail app password recommended).
     Returns (ok, msg). OTP not shown to booker.
     """
+    SMTP_HOST = st.secrets.get("SMTP_HOST", "")
+    SMTP_PORT = int(st.secrets.get("SMTP_PORT", "465"))
+    SMTP_USER = st.secrets.get("SMTP_USER", "")
+    SMTP_PASS = st.secrets.get("SMTP_PASS", "")
+    SMTP_FROM = st.secrets.get("SMTP_FROM", SMTP_USER or "")
+    SMTP_FROM_NAME = st.secrets.get("SMTP_FROM_NAME", "Room Booking")
+
     if not (SMTP_HOST and SMTP_PORT and SMTP_USER and SMTP_PASS and SMTP_FROM and is_email(to_email)):
         return False, "Email gateway not configured correctly."
 
@@ -319,12 +327,10 @@ def send_otp_email_to_approver(to_email: str, otp_plain: str, brand="Omega Finan
 
     try:
         if SMTP_PORT == 465:
-            # SSL
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context()) as server:
                 server.login(SMTP_USER, SMTP_PASS)
                 server.send_message(msg)
         else:
-            # STARTTLS (e.g., 587)
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
                 server.starttls(context=ssl.create_default_context())
                 server.login(SMTP_USER, SMTP_PASS)
@@ -353,7 +359,6 @@ def room_card(df: pd.DataFrame, room: dict, today: date):
 
     col_left, col_right = st.columns([0.6, 0.4])
 
-    # LEFT: Now / Next
     with col_left:
         st.caption("Now")
         if state == "occupied" and now_row is not None:
@@ -375,7 +380,6 @@ def room_card(df: pd.DataFrame, room: dict, today: date):
         else:
             st.markdown("<span class='muted'>No upcoming meetings</span>", unsafe_allow_html=True)
 
-    # RIGHT: Quick Book
     with col_right:
         st.caption("Quick Book")
         form_key = f"quick_book_{room['id']}"
@@ -415,7 +419,6 @@ def room_card(df: pd.DataFrame, room: dict, today: date):
                     st.error(err)
                 else:
                     if room["id"] != "br":
-                        # normal rooms → save immediately
                         df2 = load_bookings().copy()
                         df2 = pd.concat([df2, pd.DataFrame([new_row])], ignore_index=True)
                         save_bookings(df2)
@@ -423,7 +426,6 @@ def room_card(df: pd.DataFrame, room: dict, today: date):
                             f"Booked {room['name']} · {new_row['date']} {new_row['start_time']}–{new_row['end_time']}"
                         )
                     else:
-                        # Board Room → Email OTP to approver (booker never sees OTP)
                         if not is_email(APPROVER_EMAIL):
                             st.error("Approver email not configured correctly on server.")
                         else:
@@ -454,7 +456,6 @@ def otp_verification_panel():
     st.divider()
     st.subheader("🔐 Board Room Approval")
 
-    # PIN gate first
     pin_ok = st.session_state.get("approver_pin_ok", False)
     if not pin_ok:
         pin_try = st.text_input("Approver PIN", type="password")
@@ -616,6 +617,8 @@ with st.expander("📄 Download / Upload bookings CSV"):
             st.error(f"Invalid CSV. Required columns: {', '.join(sorted(required))}")
         else:
             err_msgs = []
+            def overlaps(a1, a2, b1, b2):
+                return (a1 < b2) and (b1 < a2)
             for rid in [r["id"] for r in ROOMS]:
                 sub = up_df[up_df["room_id"] == rid]
                 for d in sub["date"].unique():
@@ -624,15 +627,17 @@ with st.expander("📄 Download / Upload bookings CSV"):
                         for j, r2 in sd.iterrows():
                             if i >= j: 
                                 continue
-                            if overlaps(parse_time_str(r1["start_time"]), parse_time_str(r1["end_time"]),
-                                        parse_time_str(r2["start_time"]), parse_time_str(r2["end_time"])):
+                            s1 = datetime.strptime(r1["start_time"], "%H:%M").time()
+                            e1 = datetime.strptime(r1["end_time"], "%H:%M").time()
+                            s2 = datetime.strptime(r2["start_time"], "%H:%M").time()
+                            e2 = datetime.strptime(r2["end_time"], "%H:%M").time()
+                            if overlaps(s1, e1, s2, e2):
                                 err_msgs.append(f"Overlap in {rid} on {d}: {r1['start_time']}-{r1['end_time']} vs {r2['start_time']}-{r2['end_time']}")
             if err_msgs:
-                st.error("Upload blocked due to overlaps:\n- " + "\n- ".join(err_msgs[:10]) + ("\n..." if len(err_msgs) > 10 else ""))
+                st.error("Upload blocked due to overlaps:\\n- " + "\\n- ".join(err_msgs[:10]) + ("\\n..." if len(err_msgs) > 10 else ""))
             else:
                 save_bookings(up_df)
                 st.success("Bookings uploaded and saved.")
 
 # Footer
 st.caption("Powered by Streamlit · CSV storage · IST timezone · Email OTP for Board Room (server-side, PIN-gated approval)")
-
